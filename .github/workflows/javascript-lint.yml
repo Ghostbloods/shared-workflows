@@ -1,0 +1,182 @@
+name: JavaScript Format and Lint Check
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '20'
+      source_dir:
+        description: 'Directory to lint (relative to repo root)'
+        required: false
+        type: string
+        default: '.'
+      package_manager:
+        description: 'Package manager to use: npm | yarn | pnpm'
+        required: false
+        type: string
+        default: 'npm'
+
+jobs:
+  # ===========================================
+  # Validate - Ensure JS files and package.json exist
+  # ===========================================
+  validate:
+    name: Validate JavaScript Files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check package.json exists
+        run: |
+          if [ ! -f "${{ inputs.source_dir }}/package.json" ]; then
+            echo "ERROR: package.json not found in '${{ inputs.source_dir }}'. Exiting."
+            exit 1
+          fi
+          echo "OK: package.json found"
+
+      - name: Check JavaScript/TypeScript files exist
+        run: |
+          COUNT=$(find ${{ inputs.source_dir }} \
+            \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) \
+            -not -path "*/.git/*" \
+            -not -path "*/node_modules/*" \
+            | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: No JS/TS files found in '${{ inputs.source_dir }}'. Exiting."
+            exit 1
+          fi
+          echo "OK: Found $COUNT JS/TS file(s)"
+
+  # ===========================================
+  # Install Dependencies
+  # ===========================================
+  install:
+    name: Install Dependencies
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.source_dir }}
+        run: |
+          if [ "${{ inputs.package_manager }}" = "yarn" ]; then
+            yarn install --frozen-lockfile
+          elif [ "${{ inputs.package_manager }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ inputs.source_dir }}/node_modules
+          key: node-modules-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles(format('{0}/package-lock.json', inputs.source_dir), format('{0}/yarn.lock', inputs.source_dir)) }}
+
+  # ===========================================
+  # Format Check - Prettier
+  # ===========================================
+  format-check:
+    name: Format Check (Prettier)
+    runs-on: ubuntu-latest
+    needs: install
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ inputs.source_dir }}/node_modules
+          key: node-modules-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles(format('{0}/package-lock.json', inputs.source_dir), format('{0}/yarn.lock', inputs.source_dir)) }}
+
+      - name: Check Prettier config exists
+        id: prettier-config
+        run: |
+          if [ -f "${{ inputs.source_dir }}/.prettierrc" ] || \
+             [ -f "${{ inputs.source_dir }}/.prettierrc.json" ] || \
+             [ -f "${{ inputs.source_dir }}/.prettierrc.js" ] || \
+             [ -f "${{ inputs.source_dir }}/prettier.config.js" ]; then
+            echo "has_config=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_config=false" >> $GITHUB_OUTPUT
+            echo "No Prettier config found — installing and running with defaults"
+          fi
+
+      - name: Install Prettier (if not in dependencies)
+        working-directory: ${{ inputs.source_dir }}
+        run: |
+          if ! npx prettier --version > /dev/null 2>&1; then
+            npm install --save-dev prettier
+          fi
+
+      - name: Run Prettier check
+        working-directory: ${{ inputs.source_dir }}
+        run: npx prettier --check "**/*.{js,ts,jsx,tsx,json,css,md}" --ignore-path .gitignore
+
+  # ===========================================
+  # Lint - ESLint
+  # ===========================================
+  lint:
+    name: Lint (ESLint)
+    runs-on: ubuntu-latest
+    needs: install
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ inputs.source_dir }}/node_modules
+          key: node-modules-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles(format('{0}/package-lock.json', inputs.source_dir), format('{0}/yarn.lock', inputs.source_dir)) }}
+
+      - name: Check ESLint config exists
+        id: eslint-config
+        run: |
+          if [ -f "${{ inputs.source_dir }}/.eslintrc" ] || \
+             [ -f "${{ inputs.source_dir }}/.eslintrc.json" ] || \
+             [ -f "${{ inputs.source_dir }}/.eslintrc.js" ] || \
+             [ -f "${{ inputs.source_dir }}/.eslintrc.yml" ] || \
+             [ -f "${{ inputs.source_dir }}/eslint.config.js" ]; then
+            echo "has_config=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_config=false" >> $GITHUB_OUTPUT
+            echo "WARNING: No ESLint config found — skipping lint step"
+          fi
+
+      - name: Run ESLint
+        if: steps.eslint-config.outputs.has_config == 'true'
+        working-directory: ${{ inputs.source_dir }}
+        run: npx eslint . --ext .js,.ts,.jsx,.tsx --max-warnings=0
+
+      - name: No ESLint config notice
+        if: steps.eslint-config.outputs.has_config == 'false'
+        run: |
+          echo "::warning::No ESLint configuration found in '${{ inputs.source_dir }}'. Add .eslintrc.json to enable linting."

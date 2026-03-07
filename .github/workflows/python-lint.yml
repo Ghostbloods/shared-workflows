@@ -1,0 +1,116 @@
+name: Python Format and Lint Check
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.11'
+      source_dir:
+        description: 'Directory to lint (relative to repo root)'
+        required: false
+        type: string
+        default: '.'
+
+jobs:
+  # ===========================================
+  # Validate - Ensure Python files exist
+  # ===========================================
+  validate:
+    name: Validate Python Files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Python files exist
+        run: |
+          COUNT=$(find ${{ inputs.source_dir }} -name "*.py" -not -path "*/.git/*" | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: No Python files found in '${{ inputs.source_dir }}'. Exiting."
+            exit 1
+          fi
+          echo "OK: Found $COUNT Python file(s)"
+
+  # ===========================================
+  # Format Check - black
+  # ===========================================
+  format-check:
+    name: Format Check (black)
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install black
+        run: pip install black
+
+      - name: Run black format check
+        run: black --check --diff ${{ inputs.source_dir }}
+
+  # ===========================================
+  # Lint - flake8
+  # ===========================================
+  lint:
+    name: Lint (flake8)
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Run flake8
+        run: |
+          flake8 ${{ inputs.source_dir }} \
+            --max-line-length=88 \
+            --extend-ignore=E203,W503 \
+            --exclude=.git,__pycache__,.venv,venv,node_modules
+
+  # ===========================================
+  # Type Check - mypy (optional, soft fail)
+  # ===========================================
+  type-check:
+    name: Type Check (mypy)
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install mypy
+        run: pip install mypy
+
+      - name: Install project dependencies (if requirements.txt exists)
+        run: |
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run mypy
+        run: mypy ${{ inputs.source_dir }} --ignore-missing-imports --no-strict-optional
+        continue-on-error: true
