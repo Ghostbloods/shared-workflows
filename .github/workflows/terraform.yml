@@ -389,6 +389,19 @@ jobs:
           TF_VAR_billing_account_id: ${{ secrets.TF_VAR_billing_account_id }}
           TF_VAR_org_id: ${{ secrets.TF_VAR_org_id }}
 
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy new image to Cloud Run
+        run: |
+          IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ inputs.repo_name }}/${{ inputs.service_name }}:latest"
+          gcloud run services update ${{ inputs.service_name }} \
+            --image=$IMAGE \
+            --region=${{ inputs.region }} \
+            --project=${{ secrets.GCP_PROJECT_ID }}
+
   # ===========================================
   # Stop - Full project shutdown, manual only
   # Destroys ALL billable GCP resources.
